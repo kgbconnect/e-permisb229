@@ -1196,7 +1196,7 @@ el('pf-send').addEventListener('click', sendProfile);
 // ================= AUTHENTIFICATION PAR CODE OTP (e-mail) =================
 // URL du service d'authentification (Google Apps Script, voir le guide) :
 const CLIENT_VERSION = 'e1'; // doit correspondre à CLIENT_VERSION dans Code.gs
-const AUTH_URL = 'https://script.google.com/macros/s/AKfycbzPhTv51gPOgKMHGCHtgExfc_4TX4dtID-BYbzavqpt39A15HIt6Ash-Ob1zY2y-fQ_ww/exec'; // ← COLLER ICI l'URL du NOUVEAU déploiement Apps Script d'E-PERMISB_229 (voir GUIDE_DEPLOIEMENT.md)
+const AUTH_URL = 'AKfycbzPhTv51gPOgKMHGCHtgExfc_4TX4dtID-BYbzavqpt39A15HIt6Ash-Ob1zY2y-fQ_ww'; // ← COLLER ICI l'URL du NOUVEAU déploiement Apps Script d'E-PERMISB_229 (voir GUIDE_DEPLOIEMENT.md)
 const VALIDATOR_EMAIL = 'kgbgroup6@gmail.com';
 const SESSION_KEY = 'epermisb229_session';
 let authEmail = '';
@@ -1262,10 +1262,16 @@ function unlock(){
 async function authCall(params, ms){
   if(!AUTH_URL) throw new Error('Service d’authentification non configuré.');
   const ctl = new AbortController();
-  const timer = setTimeout(()=>ctl.abort(), ms || 20000);
+  const timer = setTimeout(()=>ctl.abort(), ms || 40000);
   try{
     const r = await fetch(AUTH_URL + '?' + new URLSearchParams(Object.assign({cv: CLIENT_VERSION}, params)).toString(), {signal: ctl.signal});
-    return await r.json();
+    const txt = await r.text();
+    try{ return JSON.parse(txt); }
+    catch(e){ throw new Error('Réponse inattendue du service. Prévenez l’administrateur : le déploiement Apps Script doit être réglé sur « Exécuter en tant que : Moi » et « Accès : Tout le monde ».'); }
+  }catch(e){
+    if(e && e.name==='AbortError') throw new Error('Le service met trop de temps à répondre (démarrage du serveur). Patientez quelques secondes puis réessayez.');
+    if(e instanceof TypeError) throw new Error('Connexion impossible. Vérifiez votre connexion Internet puis réessayez.');
+    throw e;
   } finally { clearTimeout(timer); }
 }
 async function fetchData(tok){
@@ -1305,7 +1311,7 @@ async function backgroundCheck(tok, rec){
   }catch(e){ /* hors ligne : on continue avec la copie locale */ }
 }
 async function authRequest(extra){
-  authMsg('Envoi en cours…'); el('auth-send').disabled=true; el('auth-info-send').disabled=true;
+  authMsg('Envoi en cours… (cela peut prendre quelques secondes)'); el('auth-send').disabled=true; el('auth-info-send').disabled=true;
   try{
     const res = await authCall(Object.assign({action:'request', email:authEmail}, extra||{}));
     if(res.status==='otp_sent'){
