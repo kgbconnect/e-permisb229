@@ -1200,6 +1200,8 @@ const AUTH_URL = 'https://script.google.com/macros/s/AKfycbzPhTv51gPOgKMHGCHtgEx
 const VALIDATOR_EMAIL = 'kgbgroup6@gmail.com';
 const SESSION_KEY = 'epermisb229_session';
 let authEmail = '';
+let authBusy = false;      // une seule demande à la fois (évite le double envoi : touche Entrée + clic)
+let pendingToken = null;   // connexion réussie mais questions pas encore chargées : on réessaie sans redemander de code
 
 // ---- Utilisation hors ligne : copie locale des questions (IndexedDB), valable OFFLINE_MAX_DAYS jours sans reconnexion ----
 const OFFLINE_MAX_DAYS = 30;
@@ -1311,6 +1313,8 @@ async function backgroundCheck(tok, rec){
   }catch(e){ /* hors ligne : on continue avec la copie locale */ }
 }
 async function authRequest(extra){
+  if(authBusy) return;
+  authBusy = true;
   authMsg('Envoi en cours… (cela peut prendre quelques secondes)'); el('auth-send').disabled=true; el('auth-info-send').disabled=true;
   try{
     const res = await authCall(Object.assign({action:'request', email:authEmail}, extra||{}));
@@ -1329,6 +1333,7 @@ async function authRequest(extra){
       authMsg('Accès refusé pour cette adresse.','err');
     } else { authMsg(res.message||'Erreur, réessayez.','err'); }
   }catch(e){ authMsg(e.message||'Connexion impossible.','err'); }
+  authBusy = false;
   el('auth-send').disabled=false; el('auth-info-send').disabled=false;
 }
 async function authSend(){
@@ -1343,27 +1348,34 @@ async function authInfoSend(){
   await authRequest({wa, ref, consent:'1'});
 }
 async function authVerify(){
-  const code = el('auth-code').value.trim();
-  if(!/^\d{6}$/.test(code)){ authMsg('Entrez les 6 chiffres du code.','err'); return; }
-  authMsg('Vérification…'); el('auth-verify').disabled=true;
+  if(authBusy) return;
+  authBusy = true; el('auth-verify').disabled = true;
   try{
-    const res = await authCall({action:'verify', email:authEmail, code});
-    if(res.status==='ok' && res.token){
-      lsSet(SESSION_KEY, res.token);
-      authMsg('Chargement des questions…','ok');
-      try{ await loadData(res.token); }
-      catch(e2){ authMsg(e2.message==='SESSION' ? 'Session invalide, reconnectez-vous.' : (e2.message||'Impossible de charger les questions.'),'err'); }
-    } else authMsg(res.message||'Code incorrect.','err');
+    if(!pendingToken){
+      const code = el('auth-code').value.trim();
+      if(!/^\d{6}$/.test(code)){ authMsg('Entrez les 6 chiffres du code.','err'); return; }
+      authMsg('Vérification…');
+      const res = await authCall({action:'verify', email:authEmail, code});
+      if(res.status==='ok' && res.token){ lsSet(SESSION_KEY, res.token); pendingToken = res.token; }
+      else { authMsg(res.message||'Code incorrect.','err'); return; }
+    }
+    // connexion réussie : chargement des questions (peut durer quelques secondes ; en cas d'échec, un nouveau clic réessaie sans nouveau code)
+    authMsg('Connexion réussie. Chargement des questions… (patientez, ne cliquez pas à nouveau)','ok');
+    try{ await loadData(pendingToken); pendingToken = null; }
+    catch(e2){
+      if(e2.message==='SESSION'){ pendingToken = null; lsDel(SESSION_KEY); authMsg('Session invalide : demandez un nouveau code.','err'); }
+      else authMsg('Connexion réussie, mais les questions n’ont pas pu être chargées : ' + (e2.message||'erreur inconnue') + ' Appuyez à nouveau sur « Se connecter » pour réessayer.','err');
+    }
   }catch(e){ authMsg(e.message||'Connexion impossible.','err'); }
-  el('auth-verify').disabled=false;
+  finally{ authBusy = false; el('auth-verify').disabled = false; }
 }
 async function authInit(){
   el('auth-send').onclick=authSend;
   el('auth-info-send').onclick=authInfoSend;
   el('auth-info-back').onclick=()=>{ el('auth-step-info').style.display='none'; el('auth-step-email').style.display=''; authMsg(''); };
   el('auth-verify').onclick=authVerify;
-  el('auth-resend').onclick=()=>{ el('auth-email').value=authEmail; el('auth-step-code').style.display='none'; el('auth-step-email').style.display=''; authSend(); };
-  el('auth-back').onclick=()=>{ el('auth-step-code').style.display='none'; el('auth-step-email').style.display=''; authMsg(''); };
+  el('auth-resend').onclick=()=>{ pendingToken=null; el('auth-email').value=authEmail; el('auth-step-code').style.display='none'; el('auth-step-email').style.display=''; authSend(); };
+  el('auth-back').onclick=()=>{ pendingToken=null; el('auth-step-code').style.display='none'; el('auth-step-email').style.display=''; authMsg(''); };
   el('auth-email').addEventListener('keydown',e=>{ if(e.key==='Enter') authSend(); });
   el('auth-code').addEventListener('keydown',e=>{ if(e.key==='Enter') authVerify(); });
   const tok = lsGet(SESSION_KEY);
